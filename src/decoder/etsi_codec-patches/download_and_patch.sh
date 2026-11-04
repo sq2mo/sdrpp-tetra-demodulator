@@ -1,8 +1,9 @@
 #!/bin/sh
 
-URL=http://www.etsi.org/deliver/etsi_en/300300_300399/30039502/01.03.01_60/en_30039502v010301p0.zip
+URL=https://www.etsi.org/deliver/etsi_en/300300_300399/30039502/01.03.01_60/en_30039502v010301p0.zip
+HTTPURL=http://www.etsi.org/deliver/etsi_en/300300_300399/30039502/01.03.01_60/en_30039502v010301p0.zip
 MD5_EXP=a8115fe68ef8f8cc466f4192572a1e3e
-LOCAL_FILE=etsi_tetra_codec.zip
+LOCAL_FILE=en_30039502v010301p0.zip
 
 PATCHDIR=`pwd`
 CODECDIR=`pwd`/../codec
@@ -16,7 +17,7 @@ mkdir $CODECDIR
 if [ ! -f $LOCAL_FILE ]; then
 	echo Downloading $URL ...
 # 	wget -O $LOCAL_FILE $URL
-	curl -kLSs $URL -o $LOCAL_FILE
+	curl -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0" -kLSs $URL -o $LOCAL_FILE
 else
 	echo Skipping download, file $LOCAL_FILE exists
 fi
@@ -24,22 +25,43 @@ MD5=`md5sum $LOCAL_FILE | awk '{ print $1 }'`
 
 echo Checking MD5SUM ...
 if [ $MD5 != $MD5_EXP ]; then
-	print "MD5sum of ETSI reference codec file doesn't match"
-	exit 1
+	FILESIZE=$(stat -c%s "$LOCAL_FILE")
+	echo "MD5sum of ETSI reference codec file doesn't match($MD5, $MD5_EXP). File size is $FILESIZE"
+	rm $LOCAL_FILE
+	curl -kLSs $HTTPURL -o $LOCAL_FILE
+	MD5=`md5sum $LOCAL_FILE | awk '{ print $1 }'`
+	if [ $MD5 != $MD5_EXP ]; then
+		FILESIZE=$(stat -c%s "$LOCAL_FILE")
+		echo "MD5sum of HTTP ETSI reference codec file also doesn't match($MD5, $MD5_EXP). File size is $FILESIZE"
+		cat $LOCAL_FILE
+		exit 1
+	fi
 fi
 
 echo Unpacking ZIP ...
 cd $CODECDIR
-unzip -L $PATCHDIR/etsi_tetra_codec.zip
+unzip -L $PATCHDIR/$LOCAL_FILE
 echo Contents of $CODECDIR:
 ls -lah
+
+echo Fixing filenames...
+cd "$CODECDIR/c-code"
+
+for f in *; do
+    new="$(echo "$f" | tr 'I' 'i')"
+    if [ "$f" != "$new" ]; then
+        mv -i -- "$f" "$new"
+    fi
+done
+
+cd $CODECDIR
 
 echo Applying Patches ...
 ls -lah $PATCHDIR
 cat $PATCHDIR/series
 for p in `cat "$PATCHDIR/series"`; do
 	echo "=> Applying patch '$PATCHDIR/$p'..."
-	patch -p1 < "$PATCHDIR/$p"
+	patch -p1 -d "$CODECDIR" < "$PATCHDIR/$p"
 done
 
 echo Done!

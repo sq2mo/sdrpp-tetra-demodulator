@@ -292,7 +292,11 @@ int tetra_find_train_seq(const uint8_t *in, unsigned int end_of_in,
 
 	const uint8_t *cur;
 
-	for (cur = in; cur < in + end_of_in; cur++) {
+	/* each iteration reads cur[FILTER_LOOKAHEAD_LEN-1], so stop early enough
+	 * that this lookahead never reads past in[end_of_in-1] -- otherwise we
+	 * run off the end of bitbuf[] into the rest of the struct and beyond
+	 * (heap-buffer-overflow caught by ASan; corrupts burst_cb_priv). */
+	for (cur = in; cur + (FILTER_LOOKAHEAD_LEN-1) < in + end_of_in; cur++) {
 		filter = ((filter << 1) | cur[FILTER_LOOKAHEAD_LEN-1]) & FILTER_LOOKAHEAD_MASK;
 
 		int match = 0;
@@ -345,7 +349,8 @@ void tetra_burst_rx_cb(const uint8_t *burst, unsigned int len, enum tetra_train_
 	uint8_t bbk_buf[NDB_BBK_BITS];
 	uint8_t ndbf_buf[2*NDB_BLK_BITS];
 	struct tetra_mac_state *tms = priv;
-	
+
+	if (!tms || !tms->t_display_st) return; /* decoder state not ready yet */
 	tms->t_display_st->curr_multiframe = t_phy_state.time.mn;
 	tms->t_display_st->curr_frame = t_phy_state.time.fn;
 

@@ -93,6 +93,19 @@ namespace dsp {
             // Process all samples
             int outCount = 0;
             while (offset < count) {
+                // The clock-recovery PLL can diverge on noisy input (notably
+                // HackRF's 8-bit samples): a negative 'offset' makes the VOLK
+                // dot product below read before buffer[] (SIGSEGV, upstream
+                // issue #31), and a stalled 'offset' lets this loop overrun
+                // out[] -> heap corruption that trashes the decoder state
+                // (corrupted burst_cb_priv). Detect divergence and resync
+                // instead of indexing out of bounds.
+                if (offset < 0 || outCount >= STREAM_BUFFER_SIZE) {
+                    pcl.phase = 0.0f;
+                    pcl.freq = _omega;
+                    offset = count; // exit loop cleanly; offset -= count below -> 0
+                    break;
+                }
                 float error;
                 complex_t outVal;
                 complex_t dfdt;

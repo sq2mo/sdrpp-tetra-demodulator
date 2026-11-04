@@ -181,7 +181,13 @@ namespace dsp {
 
         inline int process(int count, const uint8_t* in, float* out)  {
             int outcnt = 0;
-            tetra_burst_sync_in(trs, (uint8_t*)in, count);
+            /* tetra_burst_sync_in()/make_bitbuf_space() corrupt the trs struct
+             * (overflowing bitbuf[4096] into burst_cb_priv) when fed more bits
+             * than the bitbuf can hold, so feed it in safe-sized chunks. */
+            const int CHUNK = 2048;
+            for (int off = 0; off < count; off += CHUNK) {
+                tetra_burst_sync_in(trs, (uint8_t*)in + off, std::min(CHUNK, count - off));
+            }
             if(out_tmp_buff.getReadable(false) > 0) {
                 outcnt += out_tmp_buff.read(out, out_tmp_buff.getReadable(false));
             }

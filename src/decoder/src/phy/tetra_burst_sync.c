@@ -37,16 +37,26 @@ void tetra_burst_rx_cb(const uint8_t *burst, unsigned int len, enum tetra_train_
 
 static void make_bitbuf_space(struct tetra_rx_state *trs, unsigned int len)
 {
-	unsigned int bitbuf_space = sizeof(trs->bitbuf) - trs->bits_in_buf;
+	unsigned int bitbuf_space;
+
+	/* defensive: if the accounting ever goes out of range, an unsigned
+	 * underflow below would make us skip the shift and let the caller's
+	 * memcpy write past bitbuf[] into the following struct fields
+	 * (e.g. burst_cb_priv). Reset rather than corrupt memory. */
+	if (trs->bits_in_buf > sizeof(trs->bitbuf))
+		trs->bits_in_buf = 0;
+
+	bitbuf_space = sizeof(trs->bitbuf) - trs->bits_in_buf;
 
 	if (bitbuf_space < len) {
 		unsigned int delta = len - bitbuf_space;
+		if (delta > trs->bits_in_buf)
+			delta = trs->bits_in_buf;
 
 		DEBUGP("bitbuf left: %u, shrinking by %u\n", bitbuf_space, delta);
 		memmove(trs->bitbuf, trs->bitbuf + delta, trs->bits_in_buf - delta);
 		trs->bits_in_buf -= delta;
 		trs->bitbuf_start_bitnum += delta;
-		bitbuf_space = sizeof(trs->bitbuf) - trs->bits_in_buf;
 	}
 }
 
@@ -59,6 +69,11 @@ int tetra_burst_sync_in(struct tetra_rx_state *trs, uint8_t *bits, unsigned int 
 	DEBUGP("burst_sync_in: %u bits, state %u\n", len, trs->state);
 
 	/* First: append the data to the bitbuf */
+	if (len > sizeof(trs->bitbuf)) {
+		/* never accept more than the buffer can hold; keep newest bits */
+		bits += len - sizeof(trs->bitbuf);
+		len = sizeof(trs->bitbuf);
+	}
 	make_bitbuf_space(trs, len);
 	memcpy(trs->bitbuf + trs->bits_in_buf, bits, len);
 	trs->bits_in_buf += len;
@@ -96,6 +111,17 @@ int tetra_burst_sync_in(struct tetra_rx_state *trs, uint8_t *bits, unsigned int 
 			/* shift start of frame to start of bitbuf */
 			int offset = trs->next_frame_start_bitnum - trs->bitbuf_start_bitnum;
 			int bits_remaining = trs->bits_in_buf - offset;
+
+			/* guard against inconsistent bit accounting: a negative offset
+			 * (or out-of-range remainder) would make the memmove below read/
+			 * write past bitbuf[]. Resync from scratch instead. */
+			if (offset < 0 || bits_remaining < 0 ||
+			    (unsigned int)bits_remaining > sizeof(trs->bitbuf)) {
+				trs->state = RX_S_UNLOCKED;
+				trs->bitbuf_start_bitnum += trs->bits_in_buf;
+				trs->bits_in_buf = 0;
+				return len;
+			}
 
 			memmove(trs->bitbuf, trs->bitbuf+offset, bits_remaining);
 			trs->bits_in_buf = bits_remaining;
